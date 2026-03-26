@@ -127,6 +127,10 @@ Input (form-data):
   - Resume -> PDF / Word
   - Cover letter -> PDF / Word
 
+## UI Preview
+
+![Job Agent Dashboard](assets/ui-dashboard.png)
+
 ## Notes
 
 - `.env` is git-ignored by default.
