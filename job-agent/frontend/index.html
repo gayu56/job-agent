@@ -278,6 +278,95 @@
       cursor: not-allowed;
     }
     .hidden { display: none; }
+    select {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #2a3d6f;
+      background: #19294c;
+      color: var(--text);
+      padding: 10px;
+      font: inherit;
+    }
+    .checkRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .checkRow input { width: auto; margin: 0; }
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 10, 24, 0.72);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .overlay.show { display: flex; }
+    .overlayCard {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px 24px;
+      max-width: 360px;
+      text-align: center;
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #2a3f78;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      margin: 0 auto 12px;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progressStep { font-size: 13px; color: var(--text); margin-top: 4px; }
+    .historyBox {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      font-size: 11px;
+      color: var(--muted);
+      max-height: 140px;
+      overflow: auto;
+    }
+    .historyItem {
+      cursor: pointer;
+      padding: 4px 0;
+      border-bottom: 1px solid #1a2848;
+    }
+    .historyItem:hover { color: var(--text); }
+    .compareGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .compareCol h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    .compareCol .preview { min-height: 100px; max-height: 180px; }
+    mark {
+      background: rgba(47, 180, 120, 0.35);
+      color: inherit;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+    .factCard {
+      padding: 12px;
+      font-size: 12px;
+      color: #b8c6e8;
+    }
+    .factRisk { font-weight: 800; margin-bottom: 6px; }
+    .factFlag { padding: 4px 0; border-bottom: 1px solid #1a2848; }
     @media (max-width: 960px) {
       .app { grid-template-columns: 1fr; }
       .left { position: static; }
@@ -302,6 +391,17 @@
 
         <div class="label">Job Description</div>
         <textarea id="jdText" name="jd_text" required></textarea>
+
+        <div class="label">Resume length</div>
+        <select id="resumePreset" name="resume_preset">
+          <option value="one_page" selected>ATS — 1 page (tight)</option>
+          <option value="two_page">ATS — 2 pages (more detail)</option>
+        </select>
+
+        <div class="checkRow">
+          <input type="checkbox" id="factCheck" name="fact_check" value="true" checked>
+          <label for="factCheck">Run fact-check vs original resume</label>
+        </div>
 
         <div class="label">Resume PDF</div>
         <label class="fileBox" for="resumePdf">
@@ -354,6 +454,14 @@
         <div id="gaps" class="gapList"></div>
       </article>
 
+      <article class="card wide" id="factCheckPanel" style="display:none;">
+        <div class="wideHead">
+          <h3>Fact check</h3>
+          <span id="factRiskLabel" class="smallMuted"></span>
+        </div>
+        <div id="factFlags" class="factCard"></div>
+      </article>
+
       <article class="card wide">
         <h3 style="margin:0 0 10px;">ATS Report</h3>
         <div class="atsWrap">
@@ -362,6 +470,23 @@
             <div id="atsVerdict" class="smallMuted">Run analysis to see ATS recommendations.</div>
             <div class="label" style="margin-top:12px;">Suggestions</div>
             <ul id="suggestions" class="suggestions"></ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <div class="wideHead">
+          <h3 style="margin:0;">Compare — original vs rewritten</h3>
+          <span class="smallMuted">JD keywords highlighted in rewritten</span>
+        </div>
+        <div class="compareGrid">
+          <div class="compareCol">
+            <h4>Original (excerpt)</h4>
+            <pre id="originalExcerpt" class="preview"></pre>
+          </div>
+          <div class="compareCol">
+            <h4>Rewritten</h4>
+            <div id="resumeHighlighted" class="preview"></div>
           </div>
         </div>
       </article>
@@ -415,10 +540,28 @@
     const downloadResumeDocxBtn = document.getElementById("downloadResumeDocxBtn");
     const downloadCoverPdfBtn = document.getElementById("downloadCoverPdfBtn");
     const downloadCoverDocxBtn = document.getElementById("downloadCoverDocxBtn");
+    const progressOverlay = document.getElementById("progressOverlay");
+    const progressStepEl = document.getElementById("progressStep");
+    const factCheckPanel = document.getElementById("factCheckPanel");
+    const factRiskLabel = document.getElementById("factRiskLabel");
+    const factFlagsEl = document.getElementById("factFlags");
+    const originalExcerptEl = document.getElementById("originalExcerpt");
+    const resumeHighlightedEl = document.getElementById("resumeHighlighted");
+    const factCheckInput = document.getElementById("factCheck");
+    const historyListEl = document.getElementById("historyList");
+
+    const PIPELINE_STEPS = [
+      "Parsing job description…",
+      "Scoring match…",
+      "Rewriting resume…",
+      "Writing cover letter…",
+      "Running ATS quality check…",
+    ];
 
     let lastResumeMd = "";
     let lastCoverText = "";
     let lastCompany = "";
+    let progressTimer = null;
 
     fileInput.addEventListener("change", () => {
       const file = fileInput.files?.[0];
@@ -454,6 +597,90 @@
         .replace(/^# (.*)$/gm, "$1")
         .replace(/^\- /gm, "• ");
     }
+
+    function escapeHtml(s) {
+      return String(s || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function escapeRegex(s) {
+      return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function highlightKeywords(text, keywords) {
+      let out = escapeHtml(text || "");
+      const kws = [...(keywords || [])]
+        .map((k) => String(k).trim())
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+      for (const kw of kws) {
+        if (kw.length < 2) continue;
+        try {
+          const re = new RegExp(`(${escapeRegex(kw)})`, "gi");
+          out = out.replace(re, "<mark>$1</mark>");
+        } catch (_) {}
+      }
+      return out.replace(/\n/g, "<br>");
+    }
+
+    function showProgress(show) {
+      progressOverlay.classList.toggle("show", show);
+      progressOverlay.setAttribute("aria-hidden", show ? "false" : "true");
+      if (!show && progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+    }
+
+    function startProgress() {
+      let i = 0;
+      progressStepEl.textContent = PIPELINE_STEPS[0];
+      progressTimer = setInterval(() => {
+        i = (i + 1) % PIPELINE_STEPS.length;
+        progressStepEl.textContent = PIPELINE_STEPS[i];
+      }, 900);
+    }
+
+    function loadHistory() {
+      try {
+        const raw = localStorage.getItem("jobAgentHistory");
+        const items = JSON.parse(raw || "[]");
+        historyListEl.innerHTML = "";
+        if (!items.length) {
+          historyListEl.textContent = "No runs yet.";
+          return;
+        }
+        items.slice(0, 8).forEach((entry) => {
+          const div = document.createElement("div");
+          div.className = "historyItem";
+          const d = new Date(entry.t || Date.now());
+          div.textContent = `${entry.company || "?"} — ${d.toLocaleString()}`;
+          div.title = "Click to restore company + JD (resume not restored)";
+          div.addEventListener("click", () => {
+            if (entry.company) document.getElementById("company").value = entry.company;
+            if (entry.jd_text) document.getElementById("jdText").value = entry.jd_text;
+          });
+          historyListEl.appendChild(div);
+        });
+      } catch (_) {
+        historyListEl.textContent = "History unavailable.";
+      }
+    }
+
+    function pushHistory(company, jdText) {
+      try {
+        const raw = localStorage.getItem("jobAgentHistory");
+        let items = JSON.parse(raw || "[]");
+        items.unshift({ company, jd_text: jdText, t: Date.now() });
+        items = items.slice(0, 12);
+        localStorage.setItem("jobAgentHistory", JSON.stringify(items));
+        loadHistory();
+      } catch (_) {}
+    }
+
+    loadHistory();
 
     async function downloadExport(type, format, company, content) {
       const fd = new FormData();
@@ -496,10 +723,14 @@
       event.preventDefault();
       setError("");
       submitBtn.disabled = true;
-      submitBtn.textContent = "Analyzing...";
+      submitBtn.textContent = "Analyzing…";
+      showProgress(true);
+      startProgress();
 
       try {
         const formData = new FormData(form);
+        formData.set("fact_check", factCheckInput.checked ? "true" : "false");
+        const jdForHistory = formData.get("jd_text") || "";
         const response = await fetch("/analyze", { method: "POST", body: formData });
         const data = await response.json();
         if (!response.ok) {
@@ -507,19 +738,22 @@
         }
 
         lastCompany = formData.get("company") || "";
+        pushHistory(lastCompany, jdForHistory);
 
         const fit = Number(data.match_score?.overall_fit_percent || 0);
         fitScoreEl.textContent = `${fit}%`;
         fitScoreEl.style.color = colorByPercent(fit);
 
-        const coverage = Number(data.quality_report?.keyword_coverage_percent || 0);
+        const ks = data.keyword_stats || {};
+        const coverage = Number(
+          ks.coverage_percent ?? data.quality_report?.keyword_coverage_percent ?? 0
+        );
         keywordPctEl.textContent = `${coverage}%`;
         keywordPctEl.style.color = "var(--green)";
         keywordBarEl.style.width = `${coverage}%`;
 
-        const totalKeywords = Number((data.jd_analysis?.keywords || []).length);
-        const missingKeywords = Number((data.quality_report?.missing_keywords || []).length);
-        const matchedKeywords = Math.max(0, totalKeywords - missingKeywords);
+        const matchedKeywords = (ks.matched || []).length;
+        const missingKeywords = (ks.missing || []).length;
         keywordsMatchedEl.textContent = `${matchedKeywords} matched`;
         keywordsMissingEl.textContent = `${missingKeywords} missing`;
 
@@ -558,9 +792,30 @@
         }
 
         lastResumeMd = data.resume || "";
-        resumeRenderedEl.textContent = renderSimpleMarkdown(lastResumeMd).slice(0, 800) || "No resume generated yet.";
+        const kwList = data.jd_analysis?.keywords || [];
+        originalExcerptEl.textContent = (data.original_resume_excerpt || "").trim() || "(uploaded PDF — see downloaded source)";
+        resumeHighlightedEl.innerHTML = highlightKeywords(lastResumeMd, kwList) || "<span class='smallMuted'>No resume.</span>";
+        resumeRenderedEl.innerHTML = highlightKeywords(lastResumeMd.slice(0, 1200), kwList);
         lastCoverText = data.cover_letter || "";
         coverLetterEl.value = (lastCoverText || "No cover letter generated yet.").slice(0, 900);
+
+        const fc = data.fact_check;
+        if (fc && typeof fc === "object") {
+          factCheckPanel.style.display = "block";
+          factRiskLabel.textContent = String(fc.risk_level || "—").toUpperCase();
+          factFlagsEl.innerHTML = "";
+          (fc.flags || []).slice(0, 8).forEach((f) => {
+            const row = document.createElement("div");
+            row.className = "factFlag";
+            row.textContent = `[${f.severity || "info"}] ${f.issue || ""}`;
+            factFlagsEl.appendChild(row);
+          });
+          if (!factFlagsEl.children.length) {
+            factFlagsEl.textContent = "No issues flagged.";
+          }
+        } else {
+          factCheckPanel.style.display = "none";
+        }
 
         const resumeReady = !!lastResumeMd.trim();
         const coverReady = !!lastCoverText.trim();
@@ -571,6 +826,7 @@
       } catch (error) {
         setError(error.message || "Something went wrong.");
       } finally {
+        showProgress(false);
         submitBtn.disabled = false;
         submitBtn.textContent = "Analyze";
       }

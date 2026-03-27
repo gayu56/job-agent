@@ -5,15 +5,18 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from orchestrator import run_pipeline
 from utils.openrouter import OpenRouterError
+from utils.pdf_export import build_resume_pdf_bytes
 from utils.pdf_parser import PdfParserError, extract_pdf_text
+from utils.resume_blocks import parse_resume_markdown
 
 app = Flask(__name__, static_folder="frontend", static_url_path="")
+
 
 def _safe_slug(value: str) -> str:
     text = (value or "").strip().lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
     text = re.sub(r"(^-+)|(-+$)", "", text)
-    return (text[:60] or "output")
+    return text[:60] or "output"
 
 
 def _markdown_to_plain_text(md: str) -> str:
@@ -26,64 +29,12 @@ def _markdown_to_plain_text(md: str) -> str:
     return text.strip()
 
 
-def _parse_resume_markdown(md: str) -> list[dict[str, str]]:
-    blocks: list[dict[str, str]] = []
-    current_section = ""
-    section_bullet_limits = {
-        "professional experience": 16,
-        "relevant projects": 8,
-        "technical skills": 12,
-        "certifications": 10,
-    }
-    section_bullet_counts: dict[str, int] = {}
-
-    lines = (md or "").splitlines()
-    for raw in lines:
-        line = raw.strip()
-        if not line:
-            if blocks and blocks[-1]["type"] != "blank":
-                blocks.append({"type": "blank", "value": ""})
-            continue
-
-        if line.startswith("# "):
-            blocks.append({"type": "name", "value": line[2:].strip()})
-            continue
-        if line.startswith("## "):
-            current_section = line[3:].strip()
-            blocks.append({"type": "section", "value": current_section})
-            continue
-        if line.startswith("### "):
-            blocks.append({"type": "subsection", "value": line[4:].strip()})
-            continue
-
-        if line.startswith(("- ", "* ", "• ")):
-            section_key = current_section.lower()
-            limit = section_bullet_limits.get(section_key, 12)
-            used = section_bullet_counts.get(section_key, 0)
-            if used < limit:
-                section_bullet_counts[section_key] = used + 1
-                blocks.append({"type": "bullet", "value": line[2:].strip()})
-            continue
-
-        blocks.append({"type": "text", "value": line})
-
-    normalized: list[dict[str, str]] = []
-    for block in blocks:
-        if block["type"] == "blank":
-            if not normalized:
-                continue
-            if normalized[-1]["type"] in {"blank", "section"}:
-                continue
-        normalized.append(block)
-    return normalized
-
-
 def _make_docx_bytes(title: str, body_text: str, is_resume: bool = False) -> bytes:
     from docx import Document
 
     doc = Document()
     if is_resume:
-        blocks = _parse_resume_markdown(body_text)
+        blocks = parse_resume_markdown(body_text)
         for block in blocks:
             btype = block["type"]
             value = block["value"]
@@ -112,7 +63,7 @@ def _make_docx_bytes(title: str, body_text: str, is_resume: bool = False) -> byt
     return buf.getvalue()
 
 
-def _make_pdf_bytes(title: str, body_text: str, is_resume: bool = False) -> bytes:
+def _make_pdf_bytes_cover_letter(title: str, body_text: str) -> bytes:
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib.units import inch
     from reportlab.pdfgen import canvas
@@ -120,11 +71,9 @@ def _make_pdf_bytes(title: str, body_text: str, is_resume: bool = False) -> byte
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=LETTER)
     width, height = LETTER
-
     left = 0.75 * inch
     top = height - 0.75 * inch
     y = top
-
     c.setTitle(title or "document")
     max_width = width - (2 * left)
 
@@ -134,7 +83,7 @@ def _make_pdf_bytes(title: str, body_text: str, is_resume: bool = False) -> byte
             return top
         return y_pos
 
-    def draw_wrapped_line(line: str, y_pos: float, font_name: str, font_size: float, indent: float = 0.0) -> float:
+    def draw_wrapped_line(line: str, y_pos: float, font_name: str, font_size: float) -> float:
         c.setFont(font_name, font_size)
         words = (line or "").split()
         if not words:
@@ -142,51 +91,28 @@ def _make_pdf_bytes(title: str, body_text: str, is_resume: bool = False) -> byte
         current = ""
         for w in words:
             candidate = (current + " " + w).strip()
-            if c.stringWidth(candidate, font_name, font_size) <= (max_width - indent):
+            if c.stringWidth(candidate, font_name, font_size) <= max_width:
                 current = candidate
             else:
-                c.drawString(left + indent, y_pos, current)
+                c.drawString(left, y_pos, current)
                 y_pos -= 0.16 * inch
                 current = w
                 y_pos = ensure_space(y_pos)
         if current:
-            c.drawString(left + indent, y_pos, current)
+            c.drawString(left, y_pos, current)
             y_pos -= 0.16 * inch
         return y_pos
 
-    if is_resume:
-        blocks = _parse_resume_markdown(body_text)
-        for block in blocks:
-            y = ensure_space(y)
-            btype = block["type"]
-            value = block["value"]
-            if btype == "name":
-                y = draw_wrapped_line(value, y, "Helvetica-Bold", 14)
-                y -= 0.05 * inch
-            elif btype == "section":
-                y -= 0.04 * inch
-                y = draw_wrapped_line(value.upper(), y, "Helvetica-Bold", 11)
-                y -= 0.02 * inch
-            elif btype == "subsection":
-                y = draw_wrapped_line(value, y, "Helvetica-Bold", 10.5)
-            elif btype == "bullet":
-                y = draw_wrapped_line(f"• {value}", y, "Helvetica", 10, indent=0.08 * inch)
-            elif btype == "text":
-                y = draw_wrapped_line(value, y, "Helvetica", 10)
-            else:
-                y -= 0.09 * inch
-    else:
-        c.setFont("Helvetica-Bold", 14)
-        if title:
-            c.drawString(left, y, title)
-            y -= 0.35 * inch
-        for raw_line in (body_text or "").splitlines():
-            y = ensure_space(y)
-            if not raw_line.strip():
-                y -= 0.16 * inch
-                continue
-            y = draw_wrapped_line(raw_line, y, "Helvetica", 10.5)
-
+    c.setFont("Helvetica-Bold", 14)
+    if title:
+        c.drawString(left, y, title)
+        y -= 0.35 * inch
+    for raw_line in (body_text or "").splitlines():
+        y = ensure_space(y)
+        if not raw_line.strip():
+            y -= 0.16 * inch
+            continue
+        y = draw_wrapped_line(raw_line, y, "Helvetica", 10.5)
     c.save()
     return buf.getvalue()
 
@@ -201,6 +127,11 @@ def analyze():
     company = (request.form.get("company") or "").strip()
     jd_text = (request.form.get("jd_text") or "").strip()
     resume_text_input = (request.form.get("resume_text") or "").strip()
+    resume_preset = (request.form.get("resume_preset") or "one_page").strip()
+    fact_check_raw = request.form.get("fact_check", "true")
+
+    if resume_preset not in ("one_page", "two_page"):
+        resume_preset = "one_page"
 
     if not company:
         return jsonify({"error": "Missing required field: company"}), 400
@@ -218,7 +149,15 @@ def analyze():
         return jsonify({"error": "Provide either resume_text or resume_pdf."}), 400
 
     try:
-        result = run_pipeline(resume_text, jd_text, company)
+        result = run_pipeline(
+            resume_text,
+            jd_text,
+            company,
+            options={
+                "resume_preset": resume_preset,
+                "fact_check": fact_check_raw,
+            },
+        )
     except OpenRouterError as exc:
         return jsonify({"error": str(exc)}), 502
     except Exception as exc:
@@ -243,8 +182,7 @@ def export():
 
     slug = _safe_slug(company)
     title = "Resume" if doc_type == "resume" else "Cover Letter"
-
-    body_text = content if doc_type == "resume" else content
+    body_text = content
 
     if fmt == "docx":
         data = _make_docx_bytes(title, body_text, is_resume=(doc_type == "resume"))
@@ -256,7 +194,11 @@ def export():
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
-    data = _make_pdf_bytes(title, body_text, is_resume=(doc_type == "resume"))
+    if doc_type == "resume":
+        data = build_resume_pdf_bytes(body_text, title=title)
+    else:
+        data = _make_pdf_bytes_cover_letter(title, _markdown_to_plain_text(body_text))
+
     filename = f"{slug}-{doc_type}.pdf"
     return send_file(
         io.BytesIO(data),

@@ -4,3 +4,4 @@ PyPDF2
 python-dotenv
 python-docx
 reportlab
+pytest

@@ -11,6 +11,18 @@ ATS-optimized resume and cover letter generator powered by a multi-agent LLM pip
 - Runs ATS-focused quality checks
 - Exports resume and cover letter in PDF and Word (`.docx`)
 
+## Refinements (recent)
+
+- **Structured resume JSON** → rendered to consistent ATS markdown (`resume_structured` + `resume`)
+- **Deterministic keyword stats** (`keyword_stats`) merged into the quality report
+- **Optional fact-check** pass comparing original vs rewritten resume (`fact_check`)
+- **Resume length preset**: one-page (tight) vs two-page (more detail) — form field `resume_preset`
+- **JD parse cache** (in-memory) for repeated runs with the same JD text
+- **OpenRouter retries** + optional **fallback model** IDs on 404
+- **Platypus PDF** for resumes (cleaner typography than raw canvas)
+- **UI**: pipeline progress overlay, original vs rewritten compare with JD keyword highlights, local run history
+- **Tests**: `pytest` for keywords, resume render, and markdown blocks
+
 ## Tech Stack
 
 - Backend: Python + Flask
@@ -28,10 +40,19 @@ job-agent/
 │   ├── match_scorer.py
 │   ├── resume_rewriter.py
 │   ├── cover_letter.py
-│   └── quality_checker.py
+│   ├── quality_checker.py
+│   └── fact_check.py
 ├── utils/
 │   ├── openrouter.py
-│   └── pdf_parser.py
+│   ├── pdf_parser.py
+│   ├── keywords.py
+│   ├── resume_render.py
+│   ├── resume_blocks.py
+│   ├── pdf_export.py
+│   ├── cache.py
+│   ├── json_llm.py
+│   └── quality_merge.py
+├── tests/
 ├── frontend/
 │   └── index.html
 ├── orchestrator.py
@@ -73,6 +94,14 @@ Create a `.env` file in `job-agent/` using `.env.example`:
 OPENROUTER_API_KEY=your-openrouter-key
 OPENROUTER_MODEL_FAST=anthropic/claude-3.5-haiku
 OPENROUTER_MODEL_STRONG=anthropic/claude-3.5-sonnet
+# Optional fallbacks / retries — see job-agent/.env.example
+```
+
+### Tests
+
+```bash
+cd job-agent
+pytest tests -q
 ```
 
 ## Run Locally
@@ -93,9 +122,14 @@ Analyzes resume + JD and returns:
 
 - `jd_analysis`
 - `match_score`
-- `resume`
+- `resume` (markdown)
+- `resume_structured` (JSON sections)
+- `original_resume_excerpt` (first ~4k chars for UI compare)
 - `cover_letter`
-- `quality_report`
+- `quality_report` (includes merged `keyword_coverage_percent` / `missing_keywords` from deterministic stats)
+- `keyword_stats` (`coverage_percent`, `matched`, `missing`)
+- `fact_check` (if enabled)
+- `meta` (`preset`, `jd_cache_hit`, `steps`)
 
 Input (form-data):
 
@@ -103,6 +137,8 @@ Input (form-data):
 - `jd_text` (required)
 - `resume_text` (optional if `resume_pdf` provided)
 - `resume_pdf` (optional if `resume_text` provided)
+- `resume_preset`: `one_page` | `two_page`
+- `fact_check`: `true` | `false`
 
 ### `POST /export`
 

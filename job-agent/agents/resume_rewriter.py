@@ -1,45 +1,31 @@
+import json
+
+from utils.json_llm import parse_json_object
 from utils.openrouter import call_llm_strong
+from utils.resume_render import render_resume_markdown, trim_resume_data
 
 
-def rewrite_resume(resume_text: str, jd_parsed: dict, match_data: dict) -> str:
-    system = """You are an elite resume writer who has helped 1000+ candidates land jobs.
-Rewrite the resume bullets to:
-1. Mirror exact keywords from the job description naturally
-2. Lead with the strongest matches first
-3. Quantify achievements where possible (add [X%] placeholders if unknown)
-4. Match the tone of the company (startup = punchy, enterprise = formal)
-5. Keep it truthful - enhance framing, never fabricate
-6. Keep the output ATS-friendly and compact enough for 1-2 pages
-
-Return ONLY clean markdown using this exact structure and order:
-# Full Name
-Location | Phone | Email | LinkedIn
-
-## Professional Summary
-2-3 lines only.
-
-## Technical Skills
-- Category: item, item, item
-
-## Professional Experience
-### Job Title | Company | Dates
-- 3-4 bullets max per role, each bullet one line and impact-focused
-
-## Relevant Projects
-### Project Name
-- 2 bullets max per project
-
-## Education
-- Degree, School | Dates
-
-## Certifications
-- Certification name
-
-Formatting rules:
-- No long paragraphs in experience.
-- No repeated headings.
-- No empty sections.
-- Do not exceed content needed for a clean 1-2 page resume."""
+def rewrite_resume(resume_text: str, jd_parsed: dict, match_data: dict, preset: str = "one_page") -> tuple[str, dict]:
+    """
+    Returns (markdown_resume, structured_dict).
+    preset: one_page | two_page
+    """
+    system = """You are an elite resume writer. Output ONLY valid JSON, no markdown fences, no extra text.
+JSON schema:
+{
+  "full_name": "",
+  "contact_line": "City | phone | email | linkedin",
+  "summary": ["line1", "line2"],
+  "skills": [{"category": "Name", "items": ["a", "b"]}],
+  "experience": [{"title": "", "company": "", "dates": "", "bullets": ["..."]}],
+  "projects": [{"name": "", "bullets": ["..."]}],
+  "education": ["Degree, School | dates"],
+  "certifications": ["..."]
+}
+Rules:
+- Mirror JD keywords naturally in bullets and skills.
+- Be truthful: reframe only; do not invent employers, degrees, or tools not in the original.
+- Keep content appropriate for ATS."""
 
     keywords = jd_parsed.get("keywords", [])
     emphasis = match_data.get("top_3_angles_to_emphasize", [])
@@ -54,5 +40,21 @@ TARGET JD KEYWORDS: {", ".join(keywords)}
 SKILLS TO EMPHASIZE: {", ".join(emphasis)}
 GAPS TO DOWNPLAY: {", ".join(gaps)}
 TONE: {tone}
+PRESET: {preset} (one_page = tighter bullet counts; two_page = allow more roles/bullets)
 """
-    return call_llm_strong(system, user)
+    raw = call_llm_strong(system, user)
+    try:
+        data = parse_json_object(raw)
+    except (json.JSONDecodeError, ValueError):
+        raw2 = call_llm_strong(
+            "Return ONLY valid JSON matching the schema. No prose.",
+            "Fix this to valid JSON only:\n\n" + raw[:8000],
+        )
+        data = parse_json_object(raw2)
+
+    if not isinstance(data, dict):
+        raise ValueError("Resume rewriter did not return an object")
+
+    trimmed = trim_resume_data(data, preset)
+    md = render_resume_markdown(trimmed)
+    return md, trimmed

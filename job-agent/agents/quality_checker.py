@@ -1,19 +1,5 @@
-import json
-
+from utils.json_llm import parse_json_object
 from utils.openrouter import call_llm
-
-
-def _parse_json(content: str) -> dict:
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1:
-        text = text[start : end + 1]
-    return json.loads(text)
 
 
 def check_quality(rewritten_resume: str, cover_letter: str, jd_parsed: dict) -> dict:
@@ -38,4 +24,4 @@ COVER LETTER:
 REQUIRED KEYWORDS: {jd_parsed.get("keywords", [])}
 """
     result = call_llm(system, user)
-    return _parse_json(result)
+    return parse_json_object(result)
