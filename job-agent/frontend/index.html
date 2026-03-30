@@ -385,7 +385,7 @@
     <aside class="card left">
       <h1>Job Agent</h1>
       <p class="subtitle">ATS-optimized resume & cover letter generator</p>
-      <form id="analyzeForm">
+      <form id="analyzeForm" onsubmit="event.preventDefault(); return false;">
         <div class="label">Company</div>
         <input id="company" name="company" placeholder="Atmos Energy" required>
 
@@ -421,6 +421,10 @@
         <button id="submitBtn" class="analyzeBtn" type="submit">Analyze</button>
         <div id="error" class="error"></div>
       </form>
+      <div class="historyBox">
+        <div class="label" style="margin-top:0;">Recent runs</div>
+        <div id="historyList">No runs yet.</div>
+      </div>
     </aside>
 
     <section class="right">
@@ -511,6 +515,14 @@
       </section>
     </section>
   </main>
+
+  <div id="progressOverlay" class="overlay" aria-hidden="true">
+    <div class="overlayCard">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="smallMuted">Analyzing your inputs</div>
+      <div id="progressStep" class="progressStep">Starting…</div>
+    </div>
+  </div>
 
   <script>
     const form = document.getElementById("analyzeForm");
